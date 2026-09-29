@@ -1,0 +1,13 @@
+{
+  "name": "오늘의 진짜 정보판",
+  "short_name": "진짜 정보판",
+  "description": "데이터가 안 올 때, 값을 지어내지 않고 정직하게 보여주는 비트코인 정보판",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0f172a",
+  "theme_color": "#0f172a",
+  "lang": "ko",
+  "icons": [
+    { "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+  ]
+}
