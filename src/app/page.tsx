@@ -45,6 +45,8 @@ type Stats = {
   volume24h: number;
   marketCap: number;
   sparkline7d: number[];
+  sparkline7dTimes: number[];
+  sparklineIntervalLabel: string;
   updatedAt: string;
 };
 
@@ -334,25 +336,50 @@ type PositionMarker = {
   liquidationPrice?: number | null;
 };
 
+function fmtChartTime(ms: number): string {
+  try {
+    const parts = new Intl.DateTimeFormat("ko-KR", {
+      timeZone: "Asia/Seoul",
+      month: "numeric",
+      day: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+    }).formatToParts(new Date(ms));
+    const get = (t: string) => parts.find((p) => p.type === t)?.value ?? "";
+    return `${get("month")}/${get("day")} ${get("hour")}:${get("minute")}`;
+  } catch {
+    return "";
+  }
+}
+
 function Sparkline({
   points,
   positions,
   height,
   compact,
+  times,
+  intervalLabel: intervalLabelText,
 }: {
   points: number[];
   positions?: PositionMarker[];
   height?: number;
   compact?: boolean;
+  times?: number[];
+  intervalLabel?: string;
 }) {
   if (!points || points.length < 2) return <p className="empty">차트 데이터가 아직 없습니다.</p>;
   const w = 600;
   const h = height ?? 140;
+  const showAxes = !compact;
+  const hasTimeAxis = showAxes && !!times && times.length === points.length;
+  const leftPad = showAxes ? 54 : 0;
   const rightPad = positions && positions.length && !compact ? 46 : 0;
-  const chartW = w - rightPad;
+  const bottomAxisPad = hasTimeAxis ? 16 : 0;
+  const chartW = w - rightPad - leftPad;
   const topPad = 8;
   const bottomPad = 8;
-  const plotH = h - topPad - bottomPad;
+  const plotH = h - topPad - bottomPad - bottomAxisPad;
 
   // 레버리지 포지션의 청산가는 실제 시세와 크게 동떨어질 수 있다. 축 범위를 청산가까지
   // 늘리면 진짜 가격선이 바닥에 눌려 납작해지므로, 축은 항상 가격 데이터로만 정한다.
@@ -363,12 +390,18 @@ function Sparkline({
   const max = priceMax + pad;
   const range = max - min || 1;
   const step = chartW / (points.length - 1);
+  const x = (i: number) => leftPad + i * step;
   const yRaw = (v: number) => topPad + plotH - ((v - min) / range) * plotH;
-  const coords = points.map((p, i) => `${(i * step).toFixed(1)},${yRaw(p).toFixed(1)}`);
+  const coords = points.map((p, i) => `${x(i).toFixed(1)},${yRaw(p).toFixed(1)}`);
   const up = points[points.length - 1] >= points[0];
-  const areaPath = `M0,${topPad + plotH} L${coords.join(" L")} L${chartW},${topPad + plotH} Z`;
+  const areaPath = `M${leftPad},${topPad + plotH} L${coords.join(" L")} L${leftPad + chartW},${topPad + plotH} Z`;
   const linePath = `M${coords.join(" L")}`;
   const color = up ? "var(--fresh)" : "var(--error)";
+
+  // x축 시간 눈금: 처음/끝 포함 4개.
+  const timeTickIdx = hasTimeAxis
+    ? [0, Math.round((points.length - 1) / 3), Math.round(((points.length - 1) * 2) / 3), points.length - 1]
+    : [];
 
   // 값이 가격 축 범위 안이면 실제 위치에 줄과 낱개 라벨을 그리고, 범위를 벗어나면
   // (레버리지 손절/청산가가 실제 시세와 너무 동떨어진 경우) 개별 줄을 늘어놓는 대신
@@ -414,18 +447,18 @@ function Sparkline({
       {inRange.map((m, i) => (
         <g key={`in-${m.id}-${m.kind}-${i}`}>
           <line
-            x1="0"
+            x1={leftPad}
             y1={m.yRaw}
-            x2={chartW}
+            x2={leftPad + chartW}
             y2={m.yRaw}
             stroke={markerColor[m.kind]}
             strokeWidth={m.kind === "진입" ? 1.3 : 1}
             strokeDasharray={m.kind === "진입" ? "5 3" : m.kind === "손절" ? "3 3" : "2 3"}
             opacity={m.kind === "청산" ? 0.6 : 1}
           />
-          {m.kind === "진입" && <circle cx={Math.max(3, chartW - 3)} cy={m.yRaw} r="3.5" fill={markerColor.진입} />}
+          {m.kind === "진입" && <circle cx={Math.max(leftPad + 3, leftPad + chartW - 3)} cy={m.yRaw} r="3.5" fill={markerColor.진입} />}
           {!compact && (
-            <text x={chartW + 4} y={(labelY.get(m) ?? m.yRaw) + 3} fontSize="9" fill={markerColor[m.kind]}>
+            <text x={leftPad + chartW + 4} y={(labelY.get(m) ?? m.yRaw) + 3} fontSize="9" fill={markerColor[m.kind]}>
               #{m.id} {m.kind}
             </text>
           )}
@@ -436,7 +469,7 @@ function Sparkline({
       {offTop.map((m, i) => (
         <polygon
           key={`off-top-${m.id}-${m.kind}-${i}`}
-          points={`${chartW - 8 - i * 7},${topPad + 5} ${chartW - 2 - i * 7},${topPad + 5} ${chartW - 5 - i * 7},${topPad}`}
+          points={`${leftPad + chartW - 8 - i * 7},${topPad + 5} ${leftPad + chartW - 2 - i * 7},${topPad + 5} ${leftPad + chartW - 5 - i * 7},${topPad}`}
           fill={markerColor[m.kind]}
           opacity="0.85"
         />
@@ -444,12 +477,43 @@ function Sparkline({
       {offBottom.map((m, i) => (
         <polygon
           key={`off-bottom-${m.id}-${m.kind}-${i}`}
-          points={`${chartW - 8 - i * 7},${topPad + plotH - 5} ${chartW - 2 - i * 7},${topPad + plotH - 5} ${chartW - 5 - i * 7},${topPad + plotH}`}
+          points={`${leftPad + chartW - 8 - i * 7},${topPad + plotH - 5} ${leftPad + chartW - 2 - i * 7},${topPad + plotH - 5} ${leftPad + chartW - 5 - i * 7},${topPad + plotH}`}
           fill={markerColor[m.kind]}
           opacity="0.85"
         />
       ))}
+
+      {showAxes && (
+        <g className="chart-axis">
+          <text x={leftPad - 6} y={topPad + 4} fontSize="8.5" textAnchor="end" fill="var(--text-dim)">
+            {Math.round(priceMax).toLocaleString("ko-KR")}
+          </text>
+          <text x={leftPad - 6} y={topPad + plotH} fontSize="8.5" textAnchor="end" fill="var(--text-dim)">
+            {Math.round(priceMin).toLocaleString("ko-KR")}
+          </text>
+        </g>
+      )}
+
+      {hasTimeAxis && (
+        <g className="chart-axis">
+          {timeTickIdx.map((idx, i) => (
+            <text
+              key={`t-${idx}`}
+              x={x(idx)}
+              y={topPad + plotH + bottomAxisPad - 2}
+              fontSize="8.5"
+              textAnchor={i === 0 ? "start" : i === timeTickIdx.length - 1 ? "end" : "middle"}
+              fill="var(--text-dim)"
+            >
+              {fmtChartTime(times![idx])}
+            </text>
+          ))}
+        </g>
+      )}
     </svg>
+    {showAxes && intervalLabelText && (
+      <p className="hint chart-interval-hint">{intervalLabelText} · 시간은 Asia/Seoul(KST) 기준</p>
+    )}
     {!compact && (offTopSummary.length > 0 || offBottomSummary.length > 0) && (
       <p className="hint offrange-hint">
         ▲ 범위 위: {offTopSummary.length ? offTopSummary.map((s) => `${s.kind} ${s.count}건`).join(" · ") : "없음"}
@@ -1127,7 +1191,12 @@ export default function Home() {
       <div id="panel-chart" role="tabpanel" aria-labelledby="tab-chart" hidden={activeTab !== "chart"}>
       <Panel title="② 7일 추세 & 24시간 통계" subtitle="30초마다 자동 새로고침됩니다. 그래프·통계는 채점 저장소와 분리된 참고용입니다.">
         <div className="live-card">
-          <Sparkline points={stats?.sparkline7d ?? []} />
+          <Sparkline
+            points={stats?.sparkline7d ?? []}
+            times={stats?.sparkline7dTimes}
+            intervalLabel={stats?.sparklineIntervalLabel}
+            height={180}
+          />
           <div className="stat-grid">
             <div className="stat-tile">
               <span className="stat-label">현재가</span>
@@ -1194,7 +1263,9 @@ export default function Home() {
             <>
               <Sparkline
                 points={stats.sparkline7d}
-                height={160}
+                times={stats.sparkline7dTimes}
+                intervalLabel={stats.sparklineIntervalLabel}
+                height={190}
                 positions={openPositions.map((p) => ({
                   id: p.id,
                   entryPrice: p.entry_price,

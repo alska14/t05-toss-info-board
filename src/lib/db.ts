@@ -391,7 +391,8 @@ export interface MarketCacheRow {
   low_24h: number;
   volume_24h: number;
   market_cap: number;
-  sparkline_7d: number[];
+  // 예전 캐시 행은 순수 배열(number[]), 새 행은 {v, t} 형태 — 읽는 쪽(coingecko.ts)에서 구분한다.
+  sparkline_7d: number[] | { v: number[]; t: number[] };
   source_updated_at: string;
   cached_at: string;
 }
@@ -412,6 +413,7 @@ export async function setMarketCache(data: {
   volume24h: number;
   marketCap: number;
   sparkline7d: number[];
+  sparkline7dTimes: number[];
   sourceUpdatedAt: string;
 }): Promise<void> {
   await ensureSchema();
@@ -420,7 +422,7 @@ export async function setMarketCache(data: {
       id, price, change_24h_pct, high_24h, low_24h, volume_24h, market_cap, sparkline_7d, source_updated_at, cached_at
     ) VALUES (
       1, ${data.price}, ${data.change24hPct}, ${data.high24h}, ${data.low24h}, ${data.volume24h}, ${data.marketCap},
-      ${JSON.stringify(data.sparkline7d)}, ${data.sourceUpdatedAt}, now()
+      ${JSON.stringify({ v: data.sparkline7d, t: data.sparkline7dTimes })}, ${data.sourceUpdatedAt}, now()
     )
     ON CONFLICT (id) DO UPDATE SET
       price = EXCLUDED.price,
