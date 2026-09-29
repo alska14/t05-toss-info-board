@@ -80,6 +80,13 @@ export async function fetchMarketSnapshot(): Promise<MarketSnapshot | null> {
     const coin = arr[0];
     if (!coin) return fallbackSnapshot(dbRow);
 
+    // CoinGecko의 /coins/markets 응답은 vs_currency=krw로 요청해도 sparkline_in_7d만은
+    // 항상 USD로 내려온다(CoinGecko API 자체의 특성). 그대로 쓰면 진입가·손절가 같은 KRW
+    // 값과 스케일이 1000배 넘게 어긋나 차트에서 항상 "범위 밖"으로만 보인다. 근사 환산 대신
+    // /market_chart?vs_currency=krw로 실제 KRW 7일 히스토리를 따로 받아오고, 실패 시에만
+    // (레이트리밋 등) USD sparkline을 현재가 비율로 근사 환산해 폴백한다.
+    const sparkline7d = await fetchKrwSparkline(coin);
+
     const snapshot: MarketSnapshot = {
       price: coin.current_price,
       change24hPct: coin.price_change_percentage_24h ?? 0,
@@ -87,7 +94,7 @@ export async function fetchMarketSnapshot(): Promise<MarketSnapshot | null> {
       low24h: coin.low_24h,
       volume24h: coin.total_volume,
       marketCap: coin.market_cap,
-      sparkline7d: coin.sparkline_in_7d?.price ?? [],
+      sparkline7d,
       updatedAt: coin.last_updated,
     };
     memCache = { data: snapshot, expiresAt: Date.now() + FRESH_MS };
@@ -109,6 +116,30 @@ export async function fetchMarketSnapshot(): Promise<MarketSnapshot | null> {
   } catch {
     clearTimeout(timer);
     return fallbackSnapshot(dbRow);
+  }
+}
+
+async function fetchKrwSparkline(coin: { current_price: number; sparkline_in_7d?: { price: number[] } }): Promise<number[]> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 6000);
+  try {
+    const res = await fetch(
+      "https://api.coingecko.com/api/v3/coins/bitcoin/market_chart?vs_currency=krw&days=7",
+      { signal: controller.signal, cache: "no-store" }
+    );
+    clearTimeout(timer);
+    if (!res.ok) throw new Error(`market_chart ${res.status}`);
+    const json = (await res.json()) as { prices?: [number, number][] };
+    const prices = json.prices?.map(([, v]) => v) ?? [];
+    if (prices.length >= 2) return prices;
+    throw new Error("empty market_chart");
+  } catch {
+    clearTimeout(timer);
+    // 폴백: USD sparkline을 현재 KRW가 비율로 근사 환산 (정확한 히스토리는 아니지만 모양은 유지됨)
+    const rawSparkline = coin.sparkline_in_7d?.price ?? [];
+    const lastUsd = rawSparkline[rawSparkline.length - 1];
+    const krwPerUsd = lastUsd ? coin.current_price / lastUsd : 1;
+    return rawSparkline.map((v) => v * krwPerUsd);
   }
 }
 
